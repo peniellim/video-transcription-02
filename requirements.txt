@@ -1,0 +1,8 @@
+faster-whisper
+easyocr
+opencv-python
+openpyxl
+argostranslate
+nvidia-cublas-cu12
+nvidia-cudnn-cu12
+flask
