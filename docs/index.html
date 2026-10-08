@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Video Transcription Tool</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+:root{--bg:#fff;--fg:#1c1d21;--mut:#6b7280;--card:#f5f6f8;--line:#dfe2e7;--acc:#4f46e5;--ok:#16a34a;--err:#dc2626}
+@media(prefers-color-scheme:dark){:root{--bg:#14151a;--fg:#e8e9ed;--mut:#9aa0ab;--card:#1d1f26;--line:#2b2e37;--acc:#8b86ff;--ok:#4ade80;--err:#f87171}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif}
+main{max-width:1000px;margin:0 auto;padding:32px 20px 64px}
+h1{font-size:28px;margin:0 0 6px}h2{font-size:18px;margin:32px 0 12px}
+.sub{color:var(--mut);margin:0 0 16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px}
+a{color:var(--acc)}
+button,a.btn{background:var(--acc);color:#fff;border:1px solid var(--acc);border-radius:8px;padding:9px 14px;font:inherit;cursor:pointer;text-decoration:none;display:inline-block}
+button:disabled{opacity:.5;cursor:not-allowed}
+.ghost{background:transparent!important;color:var(--fg)!important;border-color:var(--line)!important}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+input[type=text],input[type=search],select{background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:8px 12px;font:inherit}
+input[type=text],input[type=search]{flex:1;min-width:200px}
+.dot{width:10px;height:10px;border-radius:50%;background:var(--mut);display:inline-block;margin-right:6px}
+.dot.on{background:var(--ok)}.dot.bad{background:var(--err)}
+#drop{border:2px dashed var(--line);border-radius:12px;padding:32px;text-align:center;color:var(--mut);margin:12px 0;cursor:pointer}
+#drop.over{border-color:var(--acc);color:var(--fg)}
+.bar{height:10px;background:var(--line);border-radius:6px;overflow:hidden;margin:10px 0 6px}
+.bar i{display:block;height:100%;width:0;background:var(--acc);transition:width .4s}
+pre{background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;max-height:150px;overflow:auto;font-size:12px;color:var(--mut);margin:8px 0 0;white-space:pre-wrap}
+.hide{display:none}.err{color:var(--err)}
+.chips{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0}
+.chip{background:var(--card);border:1px solid var(--line);border-radius:999px;padding:3px 12px;font-size:13px}
+.wrap{overflow-x:auto;border:1px solid var(--line);border-radius:12px}
+table{border-collapse:collapse;width:100%;font-size:14px}
+th,td{padding:8px 12px;text-align:left;vertical-align:top;border-bottom:1px solid var(--line)}
+th{background:var(--card)}
+td.tc{font-family:ui-monospace,Menlo,monospace;white-space:nowrap;font-size:13px}
+tr:last-child td{border-bottom:0}
+mark{background:#fde68a;color:#000;border-radius:3px}
+footer{margin-top:48px;color:var(--mut);font-size:13px}
+</style>
+</head>
+<body>
+<main>
+<h1>Video Transcription Tool</h1>
+<p class="sub">Upload a video (up to 60 min). Get dialogue, FPS timecodes, on-screen text and English translation as an Excel file.</p>
+
+<div class="card">
+  <div class="row">
+    <span><span class="dot" id="dot"></span><b id="cstat">Not connected</b></span>
+    <input type="text" id="code" placeholder="Paste connection code from Colab (https://xxxx.trycloudflare.com#key)">
+    <button id="conn">Connect</button>
+  </div>
+  <p class="sub" style="margin:10px 0 0;font-size:13px">The processing backend runs in Google Colab. Start it once per session with the <a id="nb" href="#" target="_blank" rel="noopener">backend notebook</a>, then paste the code it prints.</p>
+</div>
+
+<h2>Upload</h2>
+<div id="drop">Drop a video here or click to choose<input id="file" type="file" accept="video/*,audio/*,.mkv,.mxf" hidden></div>
+<div class="row">
+  <span id="fname" class="sub" style="margin:0;flex:1">No file selected</span>
+  <select id="model"><option value="large-v3">Best quality (large-v3)</option><option value="medium">Balanced (medium)</option><option value="small">Fast (small)</option></select>
+  <select id="interval"><option value="1">On-screen text: every 1s</option><option value="2">every 2s</option><option value="5">every 5s</option><option value="0">Skip on-screen text</option></select>
+  <button id="go" disabled>Transcribe</button>
+</div>
+
+<div id="prog" class="hide card" style="margin-top:12px">
+  <b id="stage">Starting...</b>
+  <div class="bar"><i id="fill"></i></div>
+  <span class="sub" id="pct" style="margin:0"></span>
+  <pre id="log"></pre>
+  <p class="err" id="error"></p>
+</div>
+
+<div id="viewer" class="hide">
+  <h2>Results</h2>
+  <div class="row"><button id="dx">Download Excel</button><button class="ghost" id="ds">Download SRT</button></div>
+  <div class="chips" id="chips"></div>
+  <div class="row" style="margin:12px 0">
+    <button id="t0">Dialogue</button>
+    <button id="t1" class="ghost">On-Screen Text</button>
+    <input type="search" id="q" placeholder="Search...">
+    <button class="ghost" id="vsrc">Source</button>
+    <button id="ven">English</button>
+    <button class="ghost" id="csv">CSV</button>
+  </div>
+  <div class="wrap"><table><thead id="head"></thead><tbody id="body"></tbody></table></div>
+  <p class="sub" id="count"></p>
+</div>
+
+<footer>Whisper + EasyOCR running on a Colab GPU. Your video is sent only to your own Colab session. To view an older .xlsx, <label style="color:var(--acc);cursor:pointer;text-decoration:underline">open it here<input id="old" type="file" accept=".xlsx" hidden></label>.</footer>
+</main>
+<script>
+(function(){
+var $=function(i){return document.getElementById(i)};
+var esc=function(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]})};
+var host=location.hostname, repo=location.pathname.split('/')[1];
+var user=host.endsWith('.github.io')?host.split('.')[0]:null;
+$('nb').href=user&&repo?'https://colab.research.google.com/github/'+user+'/'+repo+'/blob/main/notebooks/video_transcriber_colab.ipynb':'https://colab.research.google.com/';
+
+var conn=null, file=null, jobId=null, busy=false;
+
+// ---------- connection ----------
+function setConn(ok,msg){$('dot').className='dot '+(ok?'on':'bad');$('cstat').textContent=msg;updateGo()}
+function parse(c){try{var u=new URL(c.trim());return {base:u.origin,key:u.hash.slice(1)}}catch(e){return null}}
+async function api(path,opt){
+  opt=opt||{};opt.headers=Object.assign({'X-Key':conn.key},opt.headers||{});
+  var r=await fetch(conn.base+path,opt);
+  if(!r.ok)throw new Error('HTTP '+r.status);
+  return r;
+}
+async function connect(){
+  var c=parse($('code').value);
+  if(!c||!c.key){setConn(false,'Invalid code');return}
+  conn=c;$('cstat').textContent='Connecting...';
+  try{
+    var j=await (await api('/ping')).json();
+    setConn(true,j.gpu?'Connected (GPU)':'Connected (CPU only: set Colab runtime to GPU)');
+    try{localStorage.setItem('vt_code',$('code').value.trim())}catch(e){}
+  }catch(e){conn=null;setConn(false,'Could not connect. Is the Colab cell still running?')}
+}
+$('conn').onclick=connect;
+try{var saved=localStorage.getItem('vt_code');if(saved){$('code').value=saved;connect()}}catch(e){}
+
+// ---------- file selection ----------
+function updateGo(){$('go').disabled=!(conn&&file&&!busy)}
+function pick(f){file=f;$('fname').textContent=f?f.name+' ('+(f.size/1048576).toFixed(0)+' MB)':'No file selected';updateGo()}
+$('drop').onclick=function(){$('file').click()};
+$('file').onchange=function(e){pick(e.target.files[0])};
+['dragover','dragenter'].forEach(function(ev){$('drop').addEventListener(ev,function(e){e.preventDefault();$('drop').classList.add('over')})});
+['dragleave','drop'].forEach(function(ev){$('drop').addEventListener(ev,function(e){e.preventDefault();$('drop').classList.remove('over')})});
+$('drop').addEventListener('drop',function(e){if(e.dataTransfer.files[0])pick(e.dataTransfer.files[0])});
+
+function duration(f){return new Promise(function(res){
+  var v=document.createElement('video');v.preload='metadata';
+  v.onloadedmetadata=function(){res(v.duration);URL.revokeObjectURL(v.src)};
+  v.onerror=function(){res(0)};v.src=URL.createObjectURL(f)})}
+
+// ---------- run ----------
+function show(stage,p,extra){
+  $('prog').classList.remove('hide');$('stage').textContent=stage;
+  $('fill').style.width=Math.round(p*100)+'%';$('pct').textContent=extra||Math.round(p*100)+'%';
+}
+async function go(){
+  busy=true;updateGo();$('error').textContent='';$('viewer').classList.add('hide');
+  try{
+    var d=await duration(file);
+    if(d>3605)throw new Error('Video is longer than 60 minutes.');
+    jobId=Math.random().toString(36).slice(2)+Date.now().toString(36);
+    var CH=40*1048576,n=Math.max(1,Math.ceil(file.size/CH));
+    for(var i=0;i<n;i++){
+      for(var t=0;;t++){
+        try{await api('/upload?id='+jobId+'&index='+i+'&total='+n,{method:'POST',headers:{'Content-Type':'application/octet-stream'},body:file.slice(i*CH,(i+1)*CH)});break}
+        catch(e){if(t>=2)throw new Error('Upload failed: '+e.message)}
+      }
+      show('Uploading video',(i+1)/n,Math.round((i+1)/n*100)+'% uploaded');
+    }
+    var iv=parseFloat($('interval').value);
+    await api('/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:jobId,name:file.name,model:$('model').value,ocr:iv>0,interval:iv||1})});
+    poll();
+  }catch(e){$('error').textContent=e.message;busy=false;updateGo();$('prog').classList.remove('hide')}
+}
+$('go').onclick=go;
+
+function poll(){
+  var fails=0;
+  var timer=setInterval(async function(){
+    try{
+      var s=await (await api('/status/'+jobId)).json();fails=0;
+      show(s.stage||'Working',s.progress||0);
+      $('log').textContent=(s.log||[]).join('\n');$('log').scrollTop=1e9;
+      if(s.state==='done'){clearInterval(timer);await finish()}
+      else if(s.state==='error'){clearInterval(timer);$('error').textContent='Failed: '+(s.error||'unknown error');busy=false;updateGo()}
+    }catch(e){if(++fails>5){clearInterval(timer);$('error').textContent='Lost connection to Colab. Check that the backend cell is still running.';busy=false;updateGo()}}
+  },2000);
+}
+function save(blob,name){var a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;a.click()}
+async function finish(){
+  var base=file.name.replace(/\.[^.]+$/,'');
+  var blob=await (await api('/download/'+jobId+'/xlsx')).blob();
+  save(blob,base+'_transcript.xlsx');   // automatic Excel export
+  $('dx').onclick=function(){save(blob,base+'_transcript.xlsx')};
+  $('ds').onclick=async function(){save(await (await api('/download/'+jobId+'/srt')).blob(),base+'_en.srt')};
+  showBuf(await blob.arrayBuffer());
+  busy=false;updateGo();
+}
+
+// ---------- viewer ----------
+var data={},tab='Dialogue',showSrc=false,showEn=true;
+function showBuf(buf){
+  var wb=XLSX.read(buf,{type:'array'});data={};
+  ['Dialogue','On-Screen Text'].forEach(function(n){data[n]=wb.Sheets[n]?XLSX.utils.sheet_to_json(wb.Sheets[n],{defval:''}):[]});
+  var info=wb.Sheets['Info']?XLSX.utils.sheet_to_json(wb.Sheets['Info'],{header:1}):[];
+  $('chips').innerHTML=info.map(function(r){return '<span class="chip">'+esc(r[0])+': <b>'+esc(r[1])+'</b></span>'}).join('')+
+    '<span class="chip">Dialogue lines: <b>'+data.Dialogue.length+'</b></span><span class="chip">On-screen entries: <b>'+data['On-Screen Text'].length+'</b></span>';
+  $('viewer').classList.remove('hide');render();
+}
+$('old').onchange=function(e){var f=e.target.files[0];if(!f)return;var r=new FileReader();r.onload=function(x){$('dx').style.display=$('ds').style.display='none';showBuf(x.target.result)};r.readAsArrayBuffer(f)};
+function srcKey(rows){var k=rows.length?Object.keys(rows[0]):[];return k.filter(function(x){return x.indexOf('Source')===0})[0]||'Source'}
+function filtered(){
+  var rows=data[tab]||[],q=$('q').value.trim().toLowerCase(),s=srcKey(rows);
+  if(!q)return rows;
+  return rows.filter(function(r){return (String(r[s])+' '+r['English']+' '+r['TC In']).toLowerCase().indexOf(q)>-1});
+}
+function hl(t){t=esc(t);var q=esc($('q').value.trim());if(!q)return t;
+  return t.replace(new RegExp('('+q.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')+')','gi'),'<mark>$1</mark>')}
+function render(){
+  var rows=filtered(),s=srcKey(data[tab]||[]);
+  $('head').innerHTML='<tr><th>#</th><th>TC In</th><th>TC Out</th>'+(showSrc?'<th>'+esc(s)+'</th>':'')+(showEn?'<th>English</th>':'')+'</tr>';
+  $('body').innerHTML=rows.map(function(r){return '<tr><td>'+esc(r['#'])+'</td><td class="tc">'+esc(r['TC In'])+'</td><td class="tc">'+esc(r['TC Out'])+'</td>'+
+    (showSrc?'<td>'+hl(r[s])+'</td>':'')+(showEn?'<td>'+hl(r['English'])+'</td>':'')+'</tr>'}).join('');
+  $('count').textContent=rows.length+' of '+(data[tab]||[]).length+' rows';
+  $('t0').className=tab==='Dialogue'?'':'ghost';$('t1').className=tab!=='Dialogue'?'':'ghost';
+  $('vsrc').className=showSrc?'':'ghost';$('ven').className=showEn?'':'ghost';
+}
+$('t0').onclick=function(){tab='Dialogue';render()};
+$('t1').onclick=function(){tab='On-Screen Text';render()};
+$('vsrc').onclick=function(){showSrc=!showSrc;render()};
+$('ven').onclick=function(){showEn=!showEn;render()};
+$('q').oninput=render;
+$('csv').onclick=function(){
+  var rows=filtered(),s=srcKey(data[tab]||[]),q=function(v){return '"'+String(v==null?'':v).replace(/"/g,'""')+'"'};
+  var out=[['#','TC In','TC Out',s,'English'].map(q).join(',')].concat(rows.map(function(r){return [r['#'],r['TC In'],r['TC Out'],r[s],r['English']].map(q).join(',')}));
+  save(new Blob(['\ufeff'+out.join('\n')],{type:'text/csv;charset=utf-8'}),tab.replace(/\s+/g,'_').toLowerCase()+'.csv');
+};
+})();
+</script>
+</body>
+</html>
